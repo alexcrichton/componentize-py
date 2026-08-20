@@ -559,7 +559,7 @@ impl ComponentGenerator<'_> {
             &resolve,
             world,
             Some(&mut DylibOpts {
-                stack_pointer: wit_dylib::StackPointer::Global,
+                stack_pointer: wit_dylib::StackPointer::TaskContext,
                 interpreter: Some("libcomponentize_py_runtime.so".into()),
                 async_: Default::default(),
             }),
@@ -673,10 +673,14 @@ impl ComponentGenerator<'_> {
         let stderr = MemoryOutputPipe::new(10000);
 
         let mut wasi = WasiCtxBuilder::new();
-        wasi.stdin(MemoryInputPipe::new(Bytes::new()))
-            .stdout(stdout.clone())
-            .stderr(stderr.clone())
-            .env("PYTHONUNBUFFERED", "1")
+        if false {
+            wasi.stdin(MemoryInputPipe::new(Bytes::new()))
+                .stdout(stdout.clone())
+                .stderr(stderr.clone());
+        } else {
+            wasi.inherit_stdio();
+        }
+        wasi.env("PYTHONUNBUFFERED", "1")
             .env("PYTHONHOME", "/python")
             .preopened_dir(
                 embedded_python_standard_lib.path(),
@@ -813,6 +817,7 @@ impl ComponentGenerator<'_> {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.wasm_component_model_async(true);
+        config.wasm_component_model_map(true);
 
         let engine = Engine::new(&config)?;
 
@@ -848,10 +853,16 @@ impl ComponentGenerator<'_> {
                     let instance = pre.instance_pre.instantiate_async(&mut store).await?;
                     let guest = pre.indices.interface0.load(&mut store, &instance)?;
 
-                    guest
-                        .call_init(&mut store, &app_name, &symbols, stub_wasi)
-                        .await?
-                        .map_err(|e| anyhow!("{e}"))?;
+                    store
+                        .run_concurrent(async |store| {
+                            guest
+                                .call_init(store, app_name, symbols, stub_wasi)
+                                .await?
+                                .map_err(|e| anyhow!("{e}"))?;
+
+                            anyhow::Ok(())
+                        })
+                        .await??;
 
                     Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
                 }
@@ -1037,6 +1048,7 @@ fn add_wasi_and_stubs(
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
     wasmtime_wasi::p2::add_to_linker_async(linker)?;
+    wasmtime_wasi::p3::add_to_linker(linker)?;
 
     enum Stub<'a> {
         Function(&'a String, &'a FunctionKind),

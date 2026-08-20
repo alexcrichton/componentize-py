@@ -17,7 +17,7 @@ use {
     zstd::Encoder,
 };
 
-const DEBUG_RUNTIME: bool = false;
+const DEBUG_RUNTIME: bool = true;
 const STRIP_RUNTIME: bool = !DEBUG_RUNTIME;
 const ZSTD_COMPRESSION_LEVEL: i32 = if DEBUG_RUNTIME { 0 } else { 19 };
 const DEFAULT_SDK_VERSION: &str = "33";
@@ -197,7 +197,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     for library in libraries {
         compress(
-            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2"),
+            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip3"),
             library,
             out_dir,
             true,
@@ -208,7 +208,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     for library in libraries {
         compress(
-            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2/noeh"),
+            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip3/noeh"),
             library,
             out_dir,
             true,
@@ -358,12 +358,12 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include"),
+                    format!("--target=wasm32-wasip3 -fPIC -I{dir}/deps/include"),
                 )
                 .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
-                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib"),
+                    format!("--target=wasm32-wasip3 -L{dir}/deps/lib"),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([
@@ -388,7 +388,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
 
         // Link libpython3.14.so - now includes libsqlite3.a
         run(Command::new(wasi_sdk.join("bin/clang"))
-            .arg("--target=wasm32-wasip2")
+            .arg("--target=wasm32-wasip3")
             .arg("-shared")
             .arg("-o")
             .arg(cpython_wasi_dir.join("libpython3.14.so"))
@@ -515,7 +515,7 @@ fn make_runtime(
     let mut cmd = Command::new("cargo");
     cmd.current_dir(repo_dir.join("runtime"))
         .arg("build")
-        .arg("--target=wasm32-wasip2");
+        .arg("--target=wasm32-wasip3");
 
     if !DEBUG_RUNTIME {
         cmd.arg("--release");
@@ -525,15 +525,22 @@ fn make_runtime(
         cmd.arg("--features=async");
     }
 
-    for (key, _) in env::vars_os() {
-        if key
-            .to_str()
-            .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
-            .unwrap_or(false)
-        {
-            cmd.env_remove(&key);
-        }
-    }
+    cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+    // for (key, _) in env::vars_os() {
+    //     if let Some(key) = key.to_str() {
+    //         if key.starts_with("RUSTUP") {
+    //             continue;
+    //         }
+    //     }
+    //     if key
+    //         .to_str()
+    //         .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
+    //         .unwrap_or(false)
+    //     {
+    //         dbg!(&key);
+    //         cmd.env_remove(&key);
+    //     }
+    // }
 
     let target = if async_ { "async" } else { "sync" };
 
@@ -543,6 +550,7 @@ fn make_runtime(
         format!(
             "--cfg pyo3_disable_reference_pool \
              -Clink-args=-Wl,--skip-wit-component \
+             -Clink-args=-Wl,--export-if-defined=__wasm_library_tls_info \
              -Clink-args=-shared \
              -Clink-args=-L{} \
              -Clink-args=-lpython3.14 \
@@ -550,7 +558,7 @@ fn make_runtime(
             cpython_wasi_dir.to_str().unwrap()
         ),
     )
-    .env("CARGO_TARGET_WASM32_WASIP2_LINKER", clang)
+    .env("CARGO_TARGET_WASM32_WASIP3_LINKER", clang)
     .env("CARGO_TARGET_DIR", out_dir.join(target))
     .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
 
@@ -562,7 +570,7 @@ fn make_runtime(
 
     let build = if DEBUG_RUNTIME { "debug" } else { "release" };
     let path = out_dir.join(target).join(format!(
-        "wasm32-wasip2/{build}/componentize_py_runtime.wasm"
+        "wasm32-wasip3/{build}/componentize_py_runtime.wasm"
     ));
 
     if path.exists() {
@@ -592,11 +600,11 @@ fn add_compile_envs(wasi_sdk: &Path, command: &mut Command) {
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
         .env(
             "CFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip2 -D_WASI_EMULATED_SIGNAL -fPIC"),
+            format!("--target=wasm32-wasip3 --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip3 -D_WASI_EMULATED_SIGNAL -fPIC"),
         )
         .env(
             "LDFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot} -L{sysroot}/lib -lwasi-emulated-signal")
+            format!("--target=wasm32-wasip3 --sysroot={sysroot} -L{sysroot}/lib -lwasi-emulated-signal")
         );
 }
 
@@ -687,9 +695,9 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     // Note: Don't set SQLITE_THREADSAFE here - let --disable-threadsafe handle it
     // to avoid macro redefinition warnings
     let sqlite_cflags = format!(
-        "--target=wasm32-wasip2 \
+        "--target=wasm32-wasip3 \
          --sysroot={sysroot_str} \
-         -I{sysroot_str}/include/wasm32-wasip2 \
+         -I{sysroot_str}/include/wasm32-wasip3 \
          -D_WASI_EMULATED_SIGNAL \
          -D_WASI_EMULATED_PROCESS_CLOCKS \
          -fPIC \
@@ -711,9 +719,9 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .env("CFLAGS", &sqlite_cflags)
         .env(
             "LDFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
+            format!("--target=wasm32-wasip3 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
         )
-        .arg("--host=wasm32-wasip2")
+        .arg("--host=wasm32-wasip3")
         .arg(format!("--prefix={install_dir_str}"))
         .arg("--disable-shared")
         .arg("--enable-static")

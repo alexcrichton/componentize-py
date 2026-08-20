@@ -119,6 +119,7 @@ impl super::Host for Host {
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
         wasmtime_wasi::p2::add_to_linker_async(linker)?;
+        wasmtime_wasi::p3::add_to_linker(linker)?;
         Tests::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         foo_sdk::FooWorldUnion::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
@@ -977,14 +978,18 @@ fn filesystem() -> Result<()> {
 
     TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {
         runtime.block_on(async {
-            let value = world
-                .call_read_file(store, filename)
+            store
+                .run_concurrent(async |store| {
+                    let value = world
+                        .call_read_file(store, filename.to_string())
+                        .await?
+                        .map_err(|s| anyhow!("{s}"))?;
+
+                    assert_eq!(&value, message);
+
+                    anyhow::Ok(())
+                })
                 .await?
-                .map_err(|s| anyhow!("{s}"))?;
-
-            assert_eq!(&value, message);
-
-            Ok(())
         })
     })
 }
